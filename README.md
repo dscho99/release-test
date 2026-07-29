@@ -1,6 +1,9 @@
 # release-test
 
-릴리즈 마일스톤 자동화. 현재는 **rc 마일스톤 롤오버** 하나가 들어 있다.
+릴리즈 마일스톤 자동화.
+
+1. **rc 마일스톤 롤오버** — 마감 지난 마일스톤의 남은 이슈를 다음 rc 로 옮긴다
+2. **마일스톤 생성 알림** — 마일스톤이 생기면 Mattermost 로 알린다
 
 ## 뭘 하나
 
@@ -62,12 +65,38 @@ GitHub 에는 "마일스톤 기한이 도래했다"는 웹훅 이벤트가 없�
 같은 릴리즈에 마일스톤이 두 개 생긴다. 패턴에 안 맞는 마일스톤은 로그에
 `건너뜀: '...' 은 rc 패턴에 맞지 않는다` 로 남고 그대로 무시된다.
 
+## 마일스톤 생성 알림
+
+마일스톤이 만들어지면 Mattermost 로 이렇게 보낸다.
+
+```
+**[3.2.0-rc.1](https://github.com/dscho99/release-test/milestone/2)** 마일스톤이 생성되었습니다. 이슈를 추가해 주세요.
+마감: 2026-08-05 17:00 KST
+```
+
+### 발송 경로가 두 개인 이유
+
+**GITHUB_TOKEN 으로 한 행동은 새 워크플로 실행을 트리거하지 않는다**(Actions 사양).
+그래서 롤오버 스크립트가 만든 마일스톤은 `milestone: created` 이벤트가 뜨지 않는다.
+
+| 누가 만들었나 | 어디서 보내나 |
+|---|---|
+| 사람 (GitHub UI/API) | `.github/workflows/milestone-created.yaml` (이벤트) |
+| `rollover.sh` | `rollover.sh` 가 직접 (`notify_milestone_created`) |
+
+**두 곳의 문구가 같아야 한다.** 한쪽만 고치면 만든 주체에 따라 다른 메시지가 나간다.
+
+발송이 실패해도 롤오버는 중단하지 않는다 — 마일스톤 생성과 이슈 이동은 이미
+끝났고, 알림 실패로 되돌릴 이유가 없다. 로그에 `⚠ Mattermost 발송 실패` 로 남는다.
+
 ## 구성
 
 ```
 .github/workflows/milestone-rollover.yaml   cron + 수동 실행
+.github/workflows/milestone-created.yaml    마일스톤 생성 이벤트 → Mattermost
 scripts/rollover.sh                         마일스톤 롤오버
-scripts/notify.sh                           결과 HTTP POST
+scripts/notify.sh                           롤오버 결과 HTTP POST (범용 웹훅)
+scripts/mattermost.sh                       Mattermost 발송
 ```
 
 Go 나 컨테이너 이미지는 쓰지 않는다. 하는 일이 GitHub API 호출 몇 번이라
@@ -105,10 +134,14 @@ REPO=dscho99/release-test DRY_RUN=true ./scripts/rollover.sh
 
 | Secret | 필수 | 설명 |
 |---|---|---|
+| `MATTERMOST_WEBHOOK_URL` | 알림 쓰려면 | Mattermost incoming webhook URL. 없으면 발송을 건너뛴다 |
 | `TRIGGER_URL` | 아니오 | 없으면 트리거 스텝을 건너뛴다 |
 | `TRIGGER_TOKEN` | 아니오 | 있으면 `Authorization: Bearer <token>` 로 붙는다 |
 
 `GITHUB_TOKEN` 은 Actions 가 자동으로 넣어준다.
+
+> **incoming webhook URL 은 비밀값이다.** 가진 사람 누구나 그 채널에 글을 쓸 수 있다.
+> 소스에 넣지 말고 반드시 secret 으로 관리한다.
 
 ## 트리거 페이로드
 

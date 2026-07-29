@@ -98,9 +98,30 @@ resolve_next_milestone() {
   fi
 
   log "  마일스톤 생성: $title (due $next_due)"
-  gh api -X POST "repos/$REPO/milestones" \
-    -f "title=$title" -f "due_on=$next_due" |
-    jq -c '. + {created: true}'
+  local created
+  created="$(gh api -X POST "repos/$REPO/milestones" -f "title=$title" -f "due_on=$next_due")"
+
+  # 여기서 직접 알린다. GITHUB_TOKEN 으로 만든 마일스톤은 milestone:created
+  # 워크플로를 트리거하지 않기 때문이다(Actions 사양). 발송이 실패해도 롤오버
+  # 자체는 이미 끝났으므로 중단하지 않는다.
+  notify_milestone_created "$created" >&2 ||
+    log "  ⚠ Mattermost 발송 실패 — 마일스톤 생성은 정상 처리됨"
+
+  jq -c '. + {created: true}' <<<"$created"
+}
+
+# 마일스톤 생성 알림을 Mattermost 로 보낸다. milestone-created.yaml 의 메시지와
+# 같은 문구를 쓴다. 양쪽을 고칠 때는 같이 고쳐야 한다.
+notify_milestone_created() {
+  local ms="$1" title url due text
+  title="$(jq -r '.title' <<<"$ms")"
+  url="$(jq -r '.html_url' <<<"$ms")"
+  due="$(jq -r '.due_on // empty' <<<"$ms")"
+
+  text="**[$title]($url)** 마일스톤이 생성되었습니다. 이슈를 추가해 주세요."
+  [[ -n "$due" ]] && text="$text"$'\n'"마감: ${due%%T*} ${DEADLINE_HOUR}:00 KST"
+
+  "$(dirname "${BASH_SOURCE[0]}")/mattermost.sh" "$text"
 }
 
 rolled='[]'

@@ -41,6 +41,9 @@ jobs:
           # schedule 로 돌 때 inputs 는 비어 있으므로 false 로 떨어진다.
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
           CADENCE_DAYS: ${{ inputs.cadence_days || '14' }}
+          # 스크립트가 마일스톤을 새로 만들면 직접 알린다 (milestone:created
+          # 워크플로는 GITHUB_TOKEN 이 만든 마일스톤에 대해 뜨지 않는다).
+          MATTERMOST_WEBHOOK_URL: ${{ secrets.MATTERMOST_WEBHOOK_URL }}
         run: ./scripts/rollover.sh
 
       - name: 다운스트림 트리거

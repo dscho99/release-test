@@ -1,0 +1,32 @@
+name: milestone-created
+
+# 사람이 마일스톤을 만들면 Mattermost 로 알린다.
+#
+# 주의: 롤오버 워크플로가 GITHUB_TOKEN 으로 만든 마일스톤은 여기로 오지 않는다.
+# GITHUB_TOKEN 으로 발생한 이벤트는 새 워크플로 실행을 만들지 않는 게 Actions
+# 사양이라서다. 그쪽은 scripts/rollover.sh 가 직접 발송한다.
+on:
+  milestone:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mattermost 알림
+        env:
+          MATTERMOST_WEBHOOK_URL: ${{ secrets.MATTERMOST_WEBHOOK_URL }}
+          TITLE: ${{ github.event.milestone.title }}
+          URL: ${{ github.event.milestone.html_url }}
+          DUE_ON: ${{ github.event.milestone.due_on }}
+        run: |
+          text="**[${TITLE}](${URL})** 마일스톤이 생성되었습니다. 이슈를 추가해 주세요."
+          if [[ -n "${DUE_ON}" ]]; then
+            text="${text}"$'\n'"마감: ${DUE_ON%%T*} 17:00 KST"
+          fi
+          ./scripts/mattermost.sh "$text"
