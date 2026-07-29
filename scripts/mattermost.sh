@@ -14,6 +14,11 @@ set -euo pipefail
 
 MATTERMOST_WEBHOOK_URL="${MATTERMOST_WEBHOOK_URL:-}"
 text="${1:-}"
+# 사내망 밖(GitHub 호스티드 러너)에서는 Mattermost 에 아예 닿지 않는다.
+# 오래 매달려 봐야 어차피 timeout 이므로 짧게 끊는다. 사내 러너로 옮기면
+# 여유롭게 잡아도 된다.
+TIMEOUT="${MATTERMOST_TIMEOUT:-10}"
+RETRY="${MATTERMOST_RETRY:-2}"
 
 log() { printf '%s\n' "$*" >&2; }
 
@@ -32,7 +37,7 @@ payload="$(jq -nc --arg text "$text" '{text: $text}')"
 
 log "Mattermost 발송 (${#text}자)"
 curl --silent --show-error --fail-with-body \
-  --retry 3 --retry-connrefused --max-time 30 \
+  --retry "$RETRY" --retry-connrefused --max-time "$TIMEOUT" \
   -H "Content-Type: application/json" \
   --data "$payload" \
   "$MATTERMOST_WEBHOOK_URL"
