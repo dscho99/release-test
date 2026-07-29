@@ -1,0 +1,54 @@
+name: milestone-rollover
+
+on:
+  schedule:
+    # 매일 00:00 UTC (KST 09:00). GitHub 에는 마일스톤 기한 도래 이벤트가 없어서
+    # cron 으로 깨어나 due_on 을 직접 확인한다.
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "실제로 바꾸지 않고 계획만 출력"
+        type: boolean
+        default: true
+      cadence_days:
+        description: "다음 rc 마일스톤을 새로 만들 때 쓸 간격(일)"
+        type: string
+        default: "14"
+
+permissions:
+  issues: write
+
+concurrency:
+  group: milestone-rollover
+  cancel-in-progress: false
+
+jobs:
+  rollover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 기한 지난 rc 마일스톤 롤오버
+        id: rollover
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          # schedule 로 돌 때 inputs 는 비어 있으므로 false 로 떨어진다.
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          CADENCE_DAYS: ${{ inputs.cadence_days || '14' }}
+        run: ./scripts/rollover.sh
+
+      - name: 다운스트림 트리거
+        env:
+          # 두 secret 모두 없으면 스크립트가 알아서 건너뛴다.
+          TRIGGER_URL: ${{ secrets.TRIGGER_URL }}
+          TRIGGER_TOKEN: ${{ secrets.TRIGGER_TOKEN }}
+        run: ./scripts/notify.sh
+
+      - name: 결과 아티팩트 업로드
+        if: always() && hashFiles('rollover-result.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollover-result
+          path: rollover-result.json
