@@ -17,8 +17,8 @@ DRY_RUN="${DRY_RUN:-false}"
 # 다음 rc 마일스톤을 새로 만들 때 쓸 간격(일). 실행 시점이 아니라 이전 마일스톤의
 # due_on 에 더하므로, 워크플로가 하루 늦게 돌아도 일정이 밀리지 않는다.
 CADENCE_DAYS="${CADENCE_DAYS:-14}"
-# 기한이 지난 마일스톤을 닫을지 여부.
-CLOSE_MILESTONE="${CLOSE_MILESTONE:-true}"
+# 기한이 지난 마일스톤을 닫을지 여부. 기본은 false — 닫기는 사람이 확인하고 한다.
+CLOSE_MILESTONE="${CLOSE_MILESTONE:-false}"
 # 대상 마일스톤 제목 패턴. 캡처 그룹 1 = 접두사, 2 = rc 번호.
 RC_PATTERN="${RC_PATTERN:-^(.*)rc\.([0-9]+)$}"
 # PR 도 함께 옮길지 여부. issues API 는 PR 도 돌려준다.
@@ -109,10 +109,10 @@ for milestone in "${due_milestones[@]}"; do
 
   log "기한 지남: '$title' (due $due_on) → '$next_title'"
 
-  next="$(resolve_next_milestone "$next_title" "$due_on")"
-  next_number="$(jq -r '.number // empty' <<<"$next")"
-
-  # 마일스톤에 남아 있는 열린 이슈 목록.
+  # 옮길 이슈를 먼저 센다. 마일스톤을 닫지 않는 운영(기본값)에서는 기한 지난
+  # 마일스톤이 계속 열려 있으므로 cron 이 매일 같은 마일스톤을 다시 집는다.
+  # "남은 열린 이슈가 없으면 건너뛴다"가 종료 조건 역할을 한다. 덕분에 한 번
+  # 옮기고 나면 다음 실행부터는 no-op 이고, 다음 마일스톤을 괜히 만들지도 않는다.
   pull_filter='.'
   [[ "$INCLUDE_PULLS" == "true" ]] || pull_filter='select(.pull_request == null)'
   issues=()
@@ -125,18 +125,23 @@ for milestone in "${due_milestones[@]}"; do
 
   # set -u 아래에서 빈 배열 확장은 bash 3.2 에서 에러가 나므로 개수를 먼저 본다.
   if [[ ${#issues[@]} -eq 0 ]]; then
-    log "  옮길 열린 이슈 없음"
-  else
-    for issue in "${issues[@]}"; do
-      if [[ "$DRY_RUN" == "true" ]]; then
-        log "  [dry-run] #$issue → $next_title"
-      else
-        gh api -X PATCH "repos/$REPO/issues/$issue" -F "milestone=$next_number" >/dev/null
-        log "  #$issue → $next_title"
-      fi
-    done
+    log "  옮길 열린 이슈가 없어 건너뛴다 (마일스톤 닫기는 사람이 한다)."
+    continue
   fi
 
+  next="$(resolve_next_milestone "$next_title" "$due_on")"
+  next_number="$(jq -r '.number // empty' <<<"$next")"
+
+  for issue in "${issues[@]}"; do
+    if [[ "$DRY_RUN" == "true" ]]; then
+      log "  [dry-run] #$issue → $next_title"
+    else
+      gh api -X PATCH "repos/$REPO/issues/$issue" -F "milestone=$next_number" >/dev/null
+      log "  #$issue → $next_title"
+    fi
+  done
+
+  # 마일스톤 닫기는 기본적으로 사람이 한다. CLOSE_MILESTONE=true 로 켤 수 있다.
   closed=false
   if [[ "$CLOSE_MILESTONE" == "true" ]]; then
     if [[ "$DRY_RUN" == "true" ]]; then
@@ -146,6 +151,8 @@ for milestone in "${due_milestones[@]}"; do
       log "  마일스톤 닫기: $title"
     fi
     closed=true
+  else
+    log "  ⚠ '$title' 은 열린 채로 둔다. 확인 후 직접 닫아라."
   fi
 
   entry="$(
@@ -154,11 +161,13 @@ for milestone in "${due_milestones[@]}"; do
       --argjson to "$next" \
       --argjson moved "$(printf '%s\n' "${issues[@]:-}" | jq -Rn '[inputs | select(length > 0) | tonumber]')" \
       --argjson closed "$closed" \
+      --arg from_url "https://github.com/$REPO/milestone/$number" \
       '{
-        from: {number: $from_number, title: $from_title},
+        from: {number: $from_number, title: $from_title, url: $from_url},
         to: {number: $to.number, title: $to.title, created: $to.created},
         moved_issues: $moved,
-        closed: $closed
+        closed: $closed,
+        needs_manual_close: ($closed | not)
       }'
   )"
   rolled="$(jq -c --argjson e "$entry" '. + [$e]' <<<"$rolled")"
@@ -172,4 +181,19 @@ jq . "$RESULT_FILE" >&2
 
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   echo "rolled_count=$(jq 'length' <<<"$rolled")" >>"$GITHUB_OUTPUT"
+fi
+
+# 마일스톤 닫기는 사람이 하므로, 뭘 닫아야 하는지 Actions 요약에 남긴다.
+if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+  {
+    echo "## 마일스톤 롤오버"
+    [[ "$DRY_RUN" == "true" ]] && echo "> dry-run — 아무것도 바꾸지 않았다."
+    jq -r '
+      .rolled[]
+      | "- [\(.from.title)](\(.from.url)) → **\(.to.title)**"
+        + " (이슈 \(.moved_issues | length)개"
+        + (if .to.created then ", 마일스톤 새로 만듦" else "" end) + ")"
+        + (if .needs_manual_close then "\n  - ⚠ **확인 후 직접 닫아야 함**" else "" end)
+    ' "$RESULT_FILE"
+  } >>"$GITHUB_STEP_SUMMARY"
 fi

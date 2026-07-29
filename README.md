@@ -8,8 +8,19 @@
 
 1. 그 마일스톤에 남아 있는 **열린 이슈를 다음 rc 마일스톤(`rc.1`)으로 옮긴다**
 2. 다음 마일스톤이 없으면 **새로 만든다** (due date = 이전 마일스톤 due date + `CADENCE_DAYS`)
-3. 기한이 지난 마일스톤을 **닫는다**
-4. `TRIGGER_URL` 이 설정돼 있으면 결과를 **HTTP POST 로 보낸다**
+3. `TRIGGER_URL` 이 설정돼 있으면 결과를 **HTTP POST 로 보낸다**
+
+**기한이 지난 마일스톤을 닫는 건 사람이 한다.** 이슈만 비워 두고 마일스톤은 열린 채로
+남긴다. 뭘 닫아야 하는지는 Actions 실행 요약(Summary)에 링크로 뜬다.
+
+### 왜 두 번 돌지 않나
+
+마일스톤을 닫지 않으니 기한 지난 마일스톤이 계속 열려 있고, cron 은 매일 같은
+마일스톤을 다시 집는다. 그래서 **"옮길 열린 이슈가 없으면 건너뛴다"가 종료 조건**이다.
+한 번 옮기고 나면 그 마일스톤에 열린 이슈가 0개라 다음 실행부터는 아무것도 하지 않고
+(다음 마일스톤을 또 만들지도, 트리거를 또 쏘지도 않는다), 사람이 닫을 때까지 조용하다.
+
+닫기까지 자동으로 하려면 `CLOSE_MILESTONE=true`.
 
 ## 왜 cron 인가
 
@@ -54,7 +65,7 @@ REPO=dscho99/release-test DRY_RUN=true ./scripts/rollover.sh
 | `REPO` | `$GITHUB_REPOSITORY` | 대상 레포 (`owner/name`) |
 | `DRY_RUN` | `false` | `true` 면 쓰기 없이 계획만 출력 |
 | `CADENCE_DAYS` | `14` | 다음 rc 마일스톤을 새로 만들 때 쓸 간격 |
-| `CLOSE_MILESTONE` | `true` | 기한 지난 마일스톤을 닫을지 |
+| `CLOSE_MILESTONE` | `false` | 기한 지난 마일스톤을 닫을지. 기본은 사람이 닫는다 |
 | `RC_PATTERN` | `^(.*)rc\.([0-9]+)$` | 대상 제목 패턴. 그룹1=접두사, 그룹2=rc 번호 |
 | `INCLUDE_PULLS` | `true` | PR 도 함께 옮길지 |
 
@@ -78,10 +89,15 @@ REPO=dscho99/release-test DRY_RUN=true ./scripts/rollover.sh
     "dry_run": false,
     "rolled": [
       {
-        "from": { "number": 1, "title": "v1.0.0-rc.0" },
+        "from": {
+          "number": 1,
+          "title": "v1.0.0-rc.0",
+          "url": "https://github.com/dscho99/release-test/milestone/1"
+        },
         "to": { "number": 2, "title": "v1.0.0-rc.1", "created": true },
         "moved_issues": [12, 15, 18],
-        "closed": true
+        "closed": false,
+        "needs_manual_close": true
       }
     ]
   }
