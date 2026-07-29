@@ -19,8 +19,14 @@ DRY_RUN="${DRY_RUN:-false}"
 CADENCE_DAYS="${CADENCE_DAYS:-14}"
 # 기한이 지난 마일스톤을 닫을지 여부. 기본은 false — 닫기는 사람이 확인하고 한다.
 CLOSE_MILESTONE="${CLOSE_MILESTONE:-false}"
-# 대상 마일스톤 제목 패턴. 캡처 그룹 1 = 접두사, 2 = rc 번호.
-RC_PATTERN="${RC_PATTERN:-^(.*)rc\.([0-9]+)$}"
+# 대상 마일스톤 제목 패턴. 캡처 그룹 1 = 접두사, 2 = 구분자(. 또는 없음), 3 = rc 번호.
+# 'v1.0.0-rc.0' 과 'v1.0.0-rc0' 두 표기를 모두 받는다.
+RC_PATTERN="${RC_PATTERN:-^(.*)rc(\.?)([0-9]+)$}"
+# 마감 시각. GitHub 은 마일스톤 due_on 에 날짜만 저장하고 시각은 T00:00:00Z 로
+# 뭉갠다(무슨 시각을 넘겨도 마찬가지). 그래서 "며칠 몇 시 마감"의 '몇 시'는
+# 마일스톤이 아니라 여기서 고정한다. 기본값 = 마감일 17:00 KST.
+DEADLINE_HOUR="${DEADLINE_HOUR:-17}"
+DEADLINE_TZ_OFFSET="${DEADLINE_TZ_OFFSET:-9}"
 # PR 도 함께 옮길지 여부. issues API 는 PR 도 돌려준다.
 INCLUDE_PULLS="${INCLUDE_PULLS:-true}"
 RESULT_FILE="${RESULT_FILE:-rollover-result.json}"
@@ -42,16 +48,22 @@ trap 'rm -f "$open_milestones"' EXIT
 gh api --paginate "repos/$REPO/milestones?state=open&sort=due_on&direction=asc" |
   jq -s 'add // []' >"$open_milestones"
 
-# 기한이 지났고 rc 패턴에 맞는 마일스톤만 고른다.
+# 마감 시각을 UTC 기준 초로 환산한 오프셋. 17시 KST(+9) 면 due_on 자정 + 8시간.
+deadline_offset=$(((DEADLINE_HOUR - DEADLINE_TZ_OFFSET) * 3600))
+
+# 마감이 지났고 rc 패턴에 맞는 마일스톤만 고른다.
+# due_on 의 날짜 부분만 취해 자정 UTC 로 다시 만든 뒤 오프셋을 더한다. 저장된
+# 시각이 무엇이든(과거 데이터든 GitHub 이 규칙을 바꾸든) 결과가 흔들리지 않는다.
 # mapfile 은 bash 4+ 전용이라 macOS 기본 bash 3.2 에서도 돌도록 while-read 를 쓴다.
 due_milestones=()
 while IFS= read -r line; do
   due_milestones+=("$line")
 done < <(
-  jq -c --argjson now "$now" '
+  jq -c --argjson now "$now" --argjson off "$deadline_offset" '
     .[]
     | select(.due_on != null)
-    | select((.due_on | fromdateiso8601) <= $now)
+    | . + {deadline: ((.due_on[0:10] + "T00:00:00Z" | fromdateiso8601) + $off)}
+    | select(.deadline <= $now)
   ' "$open_milestones"
 )
 
@@ -64,12 +76,22 @@ if [[ ${#due_milestones[@]} -eq 0 ]]; then
 fi
 
 # 다음 rc 마일스톤을 찾고, 없으면 만든다. 마일스톤 JSON 을 stdout 으로 돌려준다.
+#
+# $1 은 현재 마일스톤의 표기를 따른 제목, $2 는 점 유무만 다른 대체 표기다.
+# 레포에 'rc.0' 과 'rc1' 이 섞여 있는 경우가 있어서 둘 다 찾아본 뒤,
+# 정말 없을 때만 새로 만든다. 없는 걸 잘못 만들면 마일스톤이 중복된다.
 resolve_next_milestone() {
-  local title="$1" due_on="$2"
+  local title="$1" alt_title="$2" due_on="$3"
   local existing
-  existing="$(jq -c --arg t "$title" '.[] | select(.title == $t)' "$open_milestones" | head -n1)"
+  existing="$(
+    jq -c --arg t "$title" --arg a "$alt_title" \
+      '.[] | select(.title == $t or .title == $a)' "$open_milestones" | head -n1
+  )"
 
   if [[ -n "$existing" ]]; then
+    local found
+    found="$(jq -r '.title' <<<"$existing")"
+    [[ "$found" == "$title" ]] || log "  기존 마일스톤 재사용: '$found' (다른 표기)"
     jq -c '. + {created: false}' <<<"$existing"
     return
   fi
@@ -103,11 +125,20 @@ for milestone in "${due_milestones[@]}"; do
   fi
 
   prefix="${BASH_REMATCH[1]}"
-  rc_num="${BASH_REMATCH[2]}"
+  sep="${BASH_REMATCH[2]}"
+  rc_num="${BASH_REMATCH[3]}"
   # 10# 을 붙여 rc.08 같은 값이 8진수로 해석되는 것을 막는다.
-  next_title="${prefix}rc.$((10#$rc_num + 1))"
+  next_num=$((10#$rc_num + 1))
+  # 현재 마일스톤의 표기(점 유무)를 따르고, 반대 표기도 후보로 들고 간다.
+  next_title="${prefix}rc${sep}${next_num}"
+  if [[ -n "$sep" ]]; then
+    alt_title="${prefix}rc${next_num}"
+  else
+    alt_title="${prefix}rc.${next_num}"
+  fi
 
-  log "기한 지남: '$title' (due $due_on) → '$next_title'"
+  deadline="$(jq -r '.deadline | todate' <<<"$milestone")"
+  log "마감 지남: '$title' (마감 $deadline) → '$next_title'"
 
   # 옮길 이슈를 먼저 센다. 마일스톤을 닫지 않는 운영(기본값)에서는 기한 지난
   # 마일스톤이 계속 열려 있으므로 cron 이 매일 같은 마일스톤을 다시 집는다.
@@ -129,15 +160,17 @@ for milestone in "${due_milestones[@]}"; do
     continue
   fi
 
-  next="$(resolve_next_milestone "$next_title" "$due_on")"
+  next="$(resolve_next_milestone "$next_title" "$alt_title" "$due_on")"
   next_number="$(jq -r '.number // empty' <<<"$next")"
+  # 재사용된 마일스톤은 제목 표기가 다를 수 있으므로 실제 제목으로 로그를 남긴다.
+  resolved_title="$(jq -r '.title' <<<"$next")"
 
   for issue in "${issues[@]}"; do
     if [[ "$DRY_RUN" == "true" ]]; then
-      log "  [dry-run] #$issue → $next_title"
+      log "  [dry-run] #$issue → $resolved_title"
     else
       gh api -X PATCH "repos/$REPO/issues/$issue" -F "milestone=$next_number" >/dev/null
-      log "  #$issue → $next_title"
+      log "  #$issue → $resolved_title"
     fi
   done
 

@@ -2,9 +2,13 @@ name: milestone-rollover
 
 on:
   schedule:
-    # 매일 00:00 UTC (KST 09:00). GitHub 에는 마일스톤 기한 도래 이벤트가 없어서
-    # cron 으로 깨어나 due_on 을 직접 확인한다.
-    - cron: "0 0 * * *"
+    # 매일 08:00 UTC = 17:00 KST. 마감이 "마감일 오후 5시"라서 그 시각에 맞춘다.
+    # 한국은 서머타임이 없어 연중 고정이다.
+    #
+    # GitHub 에는 마일스톤 기한 도래 이벤트가 없어서 cron 으로 깨어나 직접 확인한다.
+    # 마감 시각 판정 자체는 스크립트의 DEADLINE_HOUR 가 하므로, cron 이 밀리거나
+    # 더 자주 돌아도 오후 5시 전에는 옮기지 않는다.
+    - cron: "0 8 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
