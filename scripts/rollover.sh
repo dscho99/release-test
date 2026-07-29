@@ -34,11 +34,17 @@ RESULT_FILE="${RESULT_FILE:-rollover-result.json}"
 
 log() { printf '%s\n' "$*" >&2; }
 
+# 날짜를 더해 마일스톤 생성용 due_on 을 만든다.
 # GNU date(리눅스 러너)와 BSD date(로컬 macOS) 양쪽에서 동작한다.
+#
+# 정오 UTC 로 고정하는 게 핵심이다. GitHub 은 due_on 을 미국 태평양 시간대로
+# 해석해 날짜만 뽑아 저장하므로, T00:00:00Z 로 보내면 하루 앞선 날짜로 저장된다.
+# 실측: 2026-08-14T00:00:00Z → 2026-08-13, 2026-08-14T12:00:00Z → 2026-08-14.
+# 정오 UTC 는 UTC-11 ~ UTC+11 어디서 봐도 같은 날짜라 안전하다.
 add_days() {
   local iso="$1" days="$2"
-  date -u -d "$iso +$days days" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null ||
-    date -u -j -v"+${days}d" -f %Y-%m-%dT%H:%M:%SZ "$iso" +%Y-%m-%dT%H:%M:%SZ
+  date -u -d "$iso +$days days" +%Y-%m-%dT12:00:00Z 2>/dev/null ||
+    date -u -j -v"+${days}d" -f %Y-%m-%dT%H:%M:%SZ "$iso" +%Y-%m-%dT12:00:00Z
 }
 
 now="$(date -u +%s)"
