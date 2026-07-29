@@ -1,0 +1,27 @@
+name: net-check
+
+# 러너에서 사내 Mattermost 호스트에 닿는지만 확인하는 임시 워크플로.
+# secret 을 전혀 쓰지 않는다 — 웹훅 URL 이 맞고 틀리고와 무관하게
+# 네트워크 자체가 막혔는지를 가린다. 확인 끝나면 지운다.
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 러너 위치
+        run: curl -s --max-time 10 https://ipinfo.io/json || true
+
+      - name: DNS 조회
+        run: getent hosts mattermost.accordions.co.kr || echo "DNS 실패"
+
+      - name: TCP 443 도달 확인
+        run: |
+          timeout 15 bash -c 'cat < /dev/null > /dev/tcp/mattermost.accordions.co.kr/443' \
+            && echo "TCP 443 열림" || echo "TCP 443 안 열림 (exit $?)"
+
+      - name: HTTPS GET (secret 없음)
+        run: |
+          curl -sS -o /dev/null -w 'HTTP %{http_code} / connect %{time_connect}s\n' \
+            --max-time 15 https://mattermost.accordions.co.kr/ || echo "실패 (exit $?)"
